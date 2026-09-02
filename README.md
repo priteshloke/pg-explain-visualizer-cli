@@ -1,9 +1,9 @@
 # PostgreSQL EXPLAIN Visualizer & Tuning Advisor 🐘⚡
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/Node.js-v20%2B-green.svg)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-v18%2B-green.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict%20ESM-blue.svg)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/Tests-100%25%20Passing-brightgreen.svg)]()
+[![CI](https://github.com/priteshloke/pg-explain-visualizer-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/priteshloke/pg-explain-visualizer-cli/actions/workflows/ci.yml)
 
 > **Deterministic PostgreSQL `EXPLAIN (ANALYZE, BUFFERS)` execution plan visualizer, bottleneck detector, and zero-downtime index advisor.**  
 > Transforms nested, multi-thousand-line JSON execution plans into actionable terminal ASCII trees, buffer cache insights, and copy-paste `CREATE INDEX CONCURRENTLY` DDL.
