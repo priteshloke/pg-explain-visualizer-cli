@@ -1,4 +1,4 @@
-# 🐘 PostgreSQL Query Plan Tuning & Index Optimization — Deep-Dive Notebook
+# 🐘 PostgreSQL Query Plan Tuning & Index Optimization — Master Learning Notebook
 
 > **Project:** [github.com/priteshloke/pg-explain-visualizer-cli](https://github.com/priteshloke/pg-explain-visualizer-cli)  
 > **Stack:** Node.js · TypeScript · Pure ESM · PostgreSQL Internals · Commander CLI · node:test  
@@ -25,7 +25,21 @@ When an application sends a SQL query to PostgreSQL, it passes through 4 distinc
 
 ---
 
-## Part 2 — The 5 Core Database Performance Anti-Patterns
+## Part 2 — Cost Engine, Access Methods & Joins Deep Dive
+
+### 2.1 The Three Table Access Methods
+1. **Index Scan:** Traverses the B-Tree and immediately fetches the corresponding row from the heap table for every index entry. Best for queries returning very few rows ($<2\%$).
+2. **Bitmap Index Scan:** Traverses the index and creates an in-memory bitmap of matching page locations, sorts them by physical disk order, and then reads the heap pages sequentially. This converts random I/O into sequential I/O when fetching multiple matching rows ($2\%–15\%$).
+3. **Index Only Scan:** Reads data entirely from the index without touching the heap table at all. Requires that all requested columns exist in the index (via key or `INCLUDE` clause) and heap pages are clean in the **Visibility Map** (maintained by autovacuum).
+
+### 2.2 The Three Join Strategies
+1. **Nested Loop Join:** For each row in the outer table, loops through and looks up matching rows in the inner table (usually via an index). Best for small datasets.
+2. **Hash Join:** Hashes the smaller relation into memory (`work_mem`) and streams the outer relation against the hash table. Best for large, unsorted equality joins.
+3. **Merge Join:** Sorts both tables on the join key (or uses pre-sorted B-Tree indexes) and walks through them simultaneously. Best for large, sorted datasets.
+
+---
+
+## Part 3 — The 5 Core Database Performance Anti-Patterns
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
@@ -41,19 +55,19 @@ When an application sends a SQL query to PostgreSQL, it passes through 4 distinc
 └──────────────────────────────────────┴──────────┴──────────────────────────────────────┘
 ```
 
-### 2.1 Sequential Scan on Large Tables (`Seq Scan`)
+### 3.1 Sequential Scan on Large Tables (`Seq Scan`)
 * **What happens:** PostgreSQL reads every page of the table from start to finish. On a table with 5,000,000 rows, this forces millions of page reads and high disk I/O.
-* **Tuning Fix:** Create a B-Tree or BRIN index on the filtered column(s).
+* **Tuning Fix:** Create a B-Tree index on the filtered column(s).
 * **Zero-Downtime Rule:** Always use `CREATE INDEX CONCURRENTLY` in production to prevent acquiring an `ACCESS EXCLUSIVE` table lock that blocks all application reads and writes.
 
-### 2.2 Hash Join Memory Spill to Disk
+### 3.2 Hash Join Memory Spill to Disk
 * **What happens:** When executing a `Hash Join`, PostgreSQL builds an in-memory hash table of the inner relation. If the table size exceeds `work_mem` (default `4MB`), PostgreSQL splits the hash table into multiple batches (`Hash Batches > 1`) and writes temporary overflow files to disk.
 * **Tuning Fix:** Increase `work_mem` for the query session:
   ```sql
   SET work_mem = '64MB';
   ```
 
-### 2.3 Cardinality Estimation Skew
+### 3.3 Cardinality Estimation Skew
 * **What happens:** The planner estimates 10 rows (`Plan Rows: 10`), so it chooses a `Nested Loop` join. In reality, 50,000 rows match (`Actual Rows: 50000`). The `Nested Loop` executes 50,000 index lookups instead of a single `Hash Join`, multiplying query latency by $100\times$.
 * **Tuning Fix:** Run `ANALYZE <table>;` to refresh table statistics, or increase statistics target:
   ```sql
@@ -61,7 +75,7 @@ When an application sends a SQL query to PostgreSQL, it passes through 4 distinc
   ANALYZE <table>;
   ```
 
-### 2.4 High Filter Removal Ratio
+### 3.4 High Filter Removal Ratio
 * **What happens:** The database reads 100,000 rows from disk or index pages, but a `Filter` discards 99,000 rows before returning the remaining 1,000 to the client.
 * **Tuning Fix:** Include the filtered column in a **Composite Index** or create a **Partial Index**:
   ```sql
@@ -70,23 +84,78 @@ When an application sends a SQL query to PostgreSQL, it passes through 4 distinc
 
 ---
 
-## Part 3 — Interview Defense & Deep Technical Q&A
+## Part 4 — Walking the Code: `pg-explain-visualizer-cli`
+
+### 4.1 Exclusive Time Calculation (`src/engine.ts`)
+PostgreSQL reports `Actual Total Time` cumulatively for each node, which includes child nodes. To isolate the true bottleneck, our engine calculates:
+
+$$\text{Exclusive Time} = \text{Node Actual Total Time} - \sum (\text{Child Nodes Actual Total Time})$$
+
+```typescript
+const exclusiveDurationMs = Math.max(0, actualDurationMs - childrenDurationMs);
+const percentageOfTotalTime = (exclusiveDurationMs / totalExecutionTimeMs) * 100;
+
+const isBottleneck =
+  percentageOfTotalTime >= 25 || 
+  exclusiveDurationMs >= 100 || 
+  (rawNode['Node Type'] === 'Seq Scan' && actualTotalRows >= 10000);
+```
+
+### 4.2 Automated Index DDL Synthesis
+The engine extracts column names directly from SQL comparison operators in the plan's `Filter` string:
+
+```typescript
+function extractColumnsFromFilter(filter?: string): string[] {
+  if (!filter) return [];
+  const matches = filter.match(/\b([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=|>=|<=|>|<|IS|IN|LIKE|ILIKE|ANY)/gi);
+  // Parses identifiers and returns clean column names
+  ...
+}
+```
+
+---
+
+## Part 5 — Master Interview Defense & Deep Technical Q&A
 
 ### Q1: "Why does PostgreSQL sometimes choose a Seq Scan even when an Index exists?"
 **Answer:**  
 > *"The planner uses cost math. Reading via an index requires random I/O (lookup in B-Tree index page, then lookup in heap page). A sequential scan uses sequential I/O (reading contiguous 8KB disk blocks with OS read-ahead). If a query returns more than ~5–15% of the total table rows, the planner calculates that random I/O from the index is actually slower than scanning the entire table once. This can also happen if `random_page_cost` is set too high (default 4.0 for HDDs; should be tuned to 1.1 for modern NVMe SSDs)."*
 
-### Q2: "What is the difference between Exclusive Time and Total Time in an EXPLAIN tree?"
+### Q2: "What is the difference between `Shared Hit Blocks`, `Shared Read Blocks`, and `Shared Dirtied Blocks`?"
 **Answer:**  
-> *"PostgreSQL reports `Actual Total Time` cumulatively for each node, which includes the runtime of all child sub-nodes. In our visualizer, we compute **Exclusive Time** by subtracting child node durations from the parent node. This is the only way to accurately pinpoint the single node responsible for 80% of query execution time."*
+> * **Shared Hit Blocks:** The number of 8KB database pages found directly in RAM inside PostgreSQL's `shared_buffers` cache (zero disk I/O).
+> * **Shared Read Blocks:** The number of 8KB pages that were not in `shared_buffers` and had to be read from disk (or OS filesystem cache).
+> * **Shared Dirtied Blocks:** Pages modified in memory during query execution that must eventually be written to disk by the background writer or checkpoint process.
 
-### Q3: "What are the risks of `CREATE INDEX CONCURRENTLY`?"
+### Q3: "Why did your tool recommend `CREATE INDEX CONCURRENTLY` instead of standard `CREATE INDEX`? What are the tradeoffs?"
 **Answer:**  
-> *"Standard `CREATE INDEX` takes an `ACCESS EXCLUSIVE` lock, blocking all reads and writes until completion. `CREATE INDEX CONCURRENTLY` runs in two passes: it takes a `SHARE UPDATE EXCLUSIVE` lock, allowing full reads and writes to proceed concurrently. However, it takes roughly twice as long to build, consumes more CPU, and if it fails (e.g. unique constraint violation), it leaves an `INVALID` index that must be dropped and rebuilt."*
+> *"Standard `CREATE INDEX` acquires an `ACCESS EXCLUSIVE` lock on the table, which blocks all reads and writes until completion. On a table with 50 million rows, this causes an application outage.*
+> 
+> *`CREATE INDEX CONCURRENTLY` uses a **two-pass algorithm** with a `SHARE UPDATE EXCLUSIVE` lock, allowing normal `SELECT`, `INSERT`, `UPDATE`, and `DELETE` queries to run unimpeded.*
+> 
+> *The tradeoffs: it takes roughly twice as long to build, consumes more CPU/IO, must wait for all concurrent transactions to finish, and cannot run inside a transaction block (`BEGIN ... COMMIT`). If it fails midway (e.g. deadlock or unique violation), it leaves an `INVALID` index in `pg_class` that must be dropped."*
+
+### Q4: "In our EXPLAIN plan we see `Hash Batches: 4` and high latency. What is happening and how do you fix it?"
+**Answer:**  
+> *"A Hash Join builds an in-memory hash table of the smaller inner relation. If the size of that hash table exceeds the allocated `work_mem` setting (default 4MB), PostgreSQL splits the hash table into multiple batches (`Hash Batches: 4`) and writes temporary overflow chunks to disk.*
+> 
+> *To fix it, we increase `work_mem` specifically for that transaction or complex query using `SET work_mem = '64MB';`. We must be careful not to set global `work_mem` too high because `work_mem` is allocated **per operator, per connection** ($N_{\text{joins}} \times N_{\text{conn}} \times \text{work\_mem}$)."*
 
 ---
 
-## Part 4 — Practice Tuning Exercises
+## Part 6 — Production Zero-Downtime Playbook
+
+1. **Never run unindexed migrations in production without checking plan cost.**
+2. **Tune `random_page_cost` to `1.1` on SSD/NVMe cloud databases.**
+3. **Use Partial Indexes for soft-deleted / boolean status tables:**
+   ```sql
+   CREATE INDEX CONCURRENTLY idx_orders_unsettled ON orders (created_at) WHERE is_settled = false;
+   ```
+4. **Tune `shared_buffers` to ~25% of total system RAM for dedicated PostgreSQL servers.**
+
+---
+
+## Part 7 — Hands-on Practice Tuning Exercises
 
 1. **Exercise 1 (Index Synthesis):** Given an EXPLAIN plan with `Seq Scan on orders (Filter: (merchant_id = 4521 AND status = 'SETTLED'))`, generate the optimal composite index DDL.
 2. **Exercise 2 (work_mem Tuning):** Calculate the required `work_mem` when an EXPLAIN plan shows `Peak Memory Usage: 32768 kB` with `Hash Batches: 4`.
