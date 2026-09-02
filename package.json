@@ -1,0 +1,39 @@
+{
+  "name": "pg-explain-visualizer-cli",
+  "version": "1.0.0",
+  "description": "Deterministic PostgreSQL EXPLAIN (ANALYZE, BUFFERS) query plan visualizer, bottleneck detector, and zero-downtime index advisor.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "pg-explain": "dist/cli.js"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "demo": "tsx src/cli.ts --demo",
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "test": "tsx --test src/__tests__/*.test.ts"
+  },
+  "keywords": [
+    "postgresql",
+    "postgres",
+    "explain-analyze",
+    "query-optimization",
+    "database-performance",
+    "index-advisor",
+    "buffer-cache",
+    "sql-tuning",
+    "cli"
+  ],
+  "author": "Pritesh Loke <https://github.com/priteshloke>",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}
